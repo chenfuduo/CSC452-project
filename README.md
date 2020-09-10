@@ -1,7 +1,1 @@
-This is the source code for USLOSS. 
-
-To install:
-
-> ./configure
-
-> make install
+This is the operating system project for CSC 452 using the library USLOSS.
