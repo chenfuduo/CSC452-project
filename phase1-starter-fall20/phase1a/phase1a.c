@@ -18,7 +18,6 @@ typedef struct Context {
     // you'll need more stuff here
     char *stack;
     int isUsed;
-    char stackk[SIZE];
 } Context;
 
 static Context   contexts[P1_MAXPROC];
@@ -37,18 +36,16 @@ static void launch(void)
 
 void P1ContextInit(void)
 {
-    // initialize contexts
-
-    // TODO - Check if in kernel mode
-    /*
-    if(USLOSS_PsrGet() != 1)
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE;
+    if(!isKernel)
     {
         USLOSS_IllegalInstruction();
         USLOSS_Halt(0);
-    }*/
+    }
 
-    int i;
-    for(i = 0; i < P1_MAXPROC; i++)
+    // initialize contexts
+    for(int i = 0; i < P1_MAXPROC; i++)
     {
         contexts[i].startFunc = NULL;
         contexts[i].startArg  = NULL;
@@ -57,6 +54,14 @@ void P1ContextInit(void)
 }
 
 int P1ContextCreate(void (*func)(void *), void *arg, int stacksize, int *cid) {
+
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE;
+    if(!isKernel)
+    {
+        USLOSS_IllegalInstruction();
+        USLOSS_Halt(0);
+    }
 
     // Check stack size
     if(stacksize < USLOSS_MIN_STACK)
@@ -73,26 +78,25 @@ int P1ContextCreate(void (*func)(void *), void *arg, int stacksize, int *cid) {
         // Check if free
         if(!contexts[i].isUsed)
         {
+            // Allocate the stack and check allocation
+            char *newStack = (char *) malloc(stacksize);
+            if(newStack == NULL)
+            {
+                printf("Memory was not allocated successfully.\n");
+                exit(1);
+            }
+
+            // Set the values of the context
             contexts[i].startFunc = func;
             contexts[i].startArg  = arg;
+            contexts[i].stack     = newStack;
             contexts[i].isUsed    = 1;
-            contexts[i].stack     = (char *) malloc(stacksize);
             *cid = i;
 
-            USLOSS_ContextInit(&contexts[i].context, contexts[i].stackk, 
-                                sizeof(contexts[i].stackk), P3_AllocatePageTable(i), launch);
-            /*
-            if(arg == NULL)
-            {
-                USLOSS_ContextInit(&contexts[i].context, contexts[i].stackk, 
-                                sizeof(contexts[i].stackk), P3_AllocatePageTable(i), (void *) func);
-            } else 
-            {
-                USLOSS_ContextInit(&contexts[i].context, contexts[i].stackk, 
-                                sizeof(contexts[i].stackk), P3_AllocatePageTable(i), launch);
-            }*/
-            //USLOSS_ContextInit(&contexts[i].context, contexts[i].stack, 
-            //                    sizeof(contexts[i].stack), P3_AllocatePageTable(i), (void *) func);
+            // initialize the context
+            USLOSS_ContextInit(&contexts[i].context, contexts[i].stack, 
+                                stacksize, P3_AllocatePageTable(i), launch);
+            
             result = P1_SUCCESS;
             break;
         }
@@ -101,7 +105,18 @@ int P1ContextCreate(void (*func)(void *), void *arg, int stacksize, int *cid) {
     return result;
 }
 
+
 int P1ContextSwitch(int cid) {
+
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE;
+    if(!isKernel)
+    {
+        USLOSS_IllegalInstruction();
+        USLOSS_Halt(0);
+    }
+
+
     // Check cid is valid
     if(cid < 0 || cid > P1_MAXPROC)
     {
@@ -117,7 +132,6 @@ int P1ContextSwitch(int cid) {
     // switch to the specified context
     int prevId = currentCid;
     currentCid = cid;
-    
 
     if(prevId == -1)
     {
@@ -130,6 +144,16 @@ int P1ContextSwitch(int cid) {
 }
 
 int P1ContextFree(int cid) {
+
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE;
+    if(!isKernel)
+    {
+        USLOSS_IllegalInstruction();
+        USLOSS_Halt(0);
+    }
+
+
     // Check cid is valid
     if(cid < 0 || cid > P1_MAXPROC)
     {
@@ -150,10 +174,10 @@ int P1ContextFree(int cid) {
 
 
     // free the stack and mark the context as unused
+    free(contexts[cid].stack);
     contexts[cid].startFunc = NULL;
     contexts[cid].startArg  = NULL;
     contexts[cid].isUsed    = 0;
-    free(contexts[cid].stack);
     P3_FreePageTable(cid);
     return P1_SUCCESS;
 }
@@ -162,8 +186,17 @@ int P1ContextFree(int cid) {
 void 
 P1EnableInterrupts(void) 
 {
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & USLOSS_PSR_CURRENT_MODE;
+    if(!isKernel)
+    {
+        USLOSS_IllegalInstruction();
+        USLOSS_Halt(0);
+    }
+
+
     // set the interrupt bit in the PSR
-    int temp = USLOSS_PsrSet(USLOSS_PsrGet() & 0xd);
+    int temp = USLOSS_PsrSet(USLOSS_PsrGet() | USLOSS_PSR_CURRENT_INT);
     assert(temp == USLOSS_DEV_OK);
 }
 
@@ -173,15 +206,25 @@ P1EnableInterrupts(void)
 int 
 P1DisableInterrupts(void) 
 {
+
+    // Check if in kernel mode
+    int isKernel = USLOSS_PsrGet() & 0x1;
+    if(!isKernel)
+    {
+        USLOSS_IllegalInstruction();
+        USLOSS_Halt(0);
+    }
+
+
     int enabled = FALSE;
     unsigned int psr = USLOSS_PsrGet();
     // set enabled to TRUE if interrupts are already enabled
-    if(psr & 0x2)
+    if(psr & USLOSS_PSR_CURRENT_INT)
     {
         enabled = TRUE;
     }
     // clear the interrupt bit in the PSR
-    int temp = USLOSS_PsrSet(psr & 0xd);
+    int temp = USLOSS_PsrSet(psr & ~USLOSS_PSR_CURRENT_INT);
     assert(temp == USLOSS_DEV_OK);
 
     return enabled;
